@@ -1,0 +1,73 @@
+# CNGoldenClip · 金榜速录
+
+安装文件：[安装脚本](https://raw.githubusercontent.com/Diving-Fish/CNGoldenClip/main/dist/cngoldenclip.user.js)。适用于已安装 Tampermonkey 的桌面浏览器，站点固定为 `https://cngist.com`，无需部署或修改金榜后端。
+
+## 安装与使用
+
+1. 推荐点击上方「安装脚本」，在油猴页面确认安装；若只显示源码，可在油猴「实用工具」的 URL 安装入口粘贴该链接。也可在该面板导入 `dist/cngoldenclip.user.js`；也可新建脚本，把文件全文粘贴进去并保存。
+2. 打开或刷新 B 站搜索页。视频卡片的 UP 主和发布日期一行右侧会出现「添加到金榜」，右下角会出现连接工具栏。
+3. 点「连接金榜」，在新打开的金榜页面登录管理员账号。**保留连接页**，返回 B 站点「载入金榜」。成功后工具栏显示管理员名字。
+4. 点视频旁的「添加到金榜」。脚本按 UP 主 UID 匹配金榜玩家，填入视频链接和发布日期。选择已有挑战，再点击保存。
+5. 录完后点「去审核」。Standard 沿用现有接口自动通过，其余进入待审核；玩家不接受入榜等特殊状态沿用现有补录表单规则。
+
+已配置自动更新。此前手动导入的版本请从安装链接重新安装一次，后续油猴会按更新设置检查并下载新版，也可手动检查更新。名称和 namespace 保持兼容。安装后刷新 B 站搜索页。
+
+## 表单行为
+
+- 玩家匹配检查完整 `bilibiliUids`，兼容旧单 UID 字段。未匹配或存在多份匹配时，显示提示并由管理员选择；不根据 UP 主昵称猜玩家。
+- 挑战搜索显示「地图包 / 地图 / 挑战 / 难度」，难度复用网站的精简标签（如 High Std、T7、Low T3），包含地图包级挑战；复用项目的中文、拼音、首字母和英文搜索规则及挑战名显示函数。输入多个关键词用空格分开。标题匹配的地图优先列出，但不会自动确认挑战。
+- 输入后点候选项，或用方向键和回车选择。单纯填写搜索文本不算选定。
+- 搜索卡片有完整年月日时直接预填。相对日期或缺少年份时，只在打开该视频表单后获取一次视频 HTML，读取 `video:release_date` 并按北京时间转换；请求失败则日期留空、提示打开视频核对，不擅自填今天。管理员可以修改日期。
+- 已选玩家和挑战时，将 `/api/records?playerId=…` 与 `/api/admin/submissions` 返回的记录按 ID 合并，再按玩家和挑战匹配。一行文字显示已有记录的状态与条数，点「查看记录」展开日期和视频。BV 与分 P 相同则额外提示同一视频。
+- 重复提示**不阻止提交**，也不会删除或合并原记录。此功能不是并发去重或数据库约束；只覆盖现有接口返回的数据，回收站记录不在范围内，AV/短链与 BV 的跨格式同视频识别未实现（仍会提示同一玩家的同挑战记录）。
+- 检查失败会明确显示“不完整 / 暂不能确认”，不会冒充没有重复；可点「刷新检查」。切换玩家时重新检查，保存后即时更新本地记录和卡片状态。
+- 保存期间锁定表单，避免双击；网络失败时保留内容，不自动重试提交。若提示结果不确定，先刷新检查或到后台核对，再决定是否重试。
+- 本次数量和卡片保存状态保留在当前搜索页内存中，整页刷新后重置。正常搜索翻页会自动为新卡片补按钮。
+
+## 连接方式与权限
+
+同一个脚本运行在 B 站搜索页和金榜连接页，用 Tampermonkey 的 `GM_*` 存储事件传递请求/结果。金榜连接页只通过同源 fetch 调用既有 API，Cookie 由浏览器处理；脚本不读取、复制或持久化登录凭据，也不开放 CORS。
+
+写请求只允许现有的 `POST /api/admin/submissions`，请求体仍为 `playerId,challengeId,videoUrl,achievedAt,rawVideoUrl,playerNote,status`。会话和管理权限继续由后端验证。连接页刷新不会自动重放已消费的提交。
+
+`GM_xmlhttpRequest` 仅获准读取 `www.bilibili.com` 的视频页 HTML，以补全发布日期；不后台扫描视频、不调用未登录搜索接口。页面标题与玩家名称均作为文本显示，不执行外部 HTML。
+
+GM API 参考：[Tampermonkey 官方文档](https://www.tampermonkey.net/documentation.php)。
+
+## 开发与验证
+
+在仓库根目录执行：
+
+```powershell
+npm install
+npm run build
+npm test
+npm run build
+```
+
+`src/` 为源码，`dist/cngoldenclip.user.js` 为可安装的独立打包产物（包含项目搜索依赖，无外部运行时 CDN）。修改源码后须重新生成产物。
+
+本地交互验证：
+
+```powershell
+npm run dev
+```
+
+打开 `http://127.0.0.1:8279/search`。点「连接金榜」后，通过页面底部「打开模拟金榜连接页」链接在另一标签页打开连接，再回搜索页点「载入金榜」。该验证页用本地存储模拟 GM 通信，接口只写进程内存，不连接线上数据库。支持切换队列/保存失败、模拟搜索翻页。
+
+已验证：真实 B 站卡片结构、视频页发布日期字段；本地跨标签页通信、UID 匹配、日期预填、重复对照、普通/Standard 保存状态、未知 UID、读取失败、保存失败保留表单和翻页挂载。真实 Tampermonkey 扩展与线上管理员会话仍需安装后联调；未向线上提交测试记录。
+
+## 发版
+
+1. 修改源码，在 package.json 中递增 version。
+2. 运行 npm install、npm test、npm run build。
+3. 将源码、package.json / package-lock.json 和 dist 下两个产物一起提交并推送到 main。
+4. 可选创建同版本 Git tag / GitHub Release，记录变更说明。
+
+构建从 package.json 读取唯一版本号。dist/cngoldenclip.meta.js 用于检查版本，dist/cngoldenclip.user.js 用于安装及下载更新。main 上的 dist 代表已发布版本；只改源码而不构建不会更新管理员的脚本。两个文件由同一次提交发布，不应手工编辑。
+
+## 接口兼容
+
+固定连接 https://cngist.com，使用现有 GET /api/auth/session、GET /api/catalog、GET /api/records?playerId=…、GET /api/admin/submissions 和 POST /api/admin/submissions。无需修改后端。网站改变接口字段时需同步检查脚本。
+
+src/vendor 中保留有来源版本说明的 CNGist 搜索、挑战名称及 Tier 规则副本；拼音库随构建打包。仓库可独立安装依赖和构建。
