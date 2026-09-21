@@ -1,6 +1,6 @@
 {
   "name": "cngoldenclip",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "private": true,
   "type": "module",
   "description": "A userscript for CNGist admins to quickly log challenge completions from Bilibili search results, with automatic player matching and duplicate reminders.",

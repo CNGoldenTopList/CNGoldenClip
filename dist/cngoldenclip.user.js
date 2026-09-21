@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CN 金榜 · B站搜索补录
 // @namespace    https://cngist.com/
-// @version      1.0.3
+// @version      1.0.4
 // @updateURL    https://raw.githubusercontent.com/Diving-Fish/CNGoldenClip/main/dist/cngoldenclip.meta.js
 // @downloadURL  https://raw.githubusercontent.com/Diving-Fish/CNGoldenClip/main/dist/cngoldenclip.user.js
 // @homepageURL  https://github.com/Diving-Fish/CNGoldenClip
@@ -24725,6 +24725,7 @@ button{border:1px solid #414852;background:#252c37;color:#e4e7ed;border-radius:6
 button:hover{background:#343f50}button:disabled{opacity:.5;cursor:default}button.primary{background:#276cc8;border-color:#488ced;color:white}
 button:focus-visible,a:focus-visible{outline:2px solid #75b5ff;outline-offset:2px}a{color:#85b8ff;text-decoration:none}
 .toolbar{position:fixed;right:24px;bottom:24px;z-index:2147483645;padding:10px 12px;background:#181e28;border:1px solid #414852;border-radius:10px;box-shadow:0 4px 20px #0005;display:flex;gap:8px;align-items:center;flex-wrap:wrap;max-width:calc(100vw - 32px)}
+.toolbar[hidden]{display:none}
 .brand{color:#e9c474;font-weight:650}.muted,.hint{font-size:12px;color:#aab4c4}.error{color:#ffaaaa}.warning{color:#efd18d}
 dialog{color:inherit;background:#181e28;border:1px solid #495365;border-radius:12px;padding:0;width:660px;max-width:calc(100vw - 28px);max-height:90vh;box-shadow:0 12px 60px #0008}
 dialog::backdrop{background:#0008}.panel{padding:20px;display:grid;gap:14px}.head{display:flex;gap:14px;align-items:start;justify-content:space-between}.head h2{font-size:18px;margin:0}.video{font-size:14px;margin:4px 0;overflow-wrap:anywhere}
@@ -24788,7 +24789,7 @@ label{display:grid;align-content:start;gap:5px;font-size:13px}input,textarea{wid
     const root = mount(), client = makeClient(gm2, origin);
     let catalog, catalogPromise, choices = [], activeDialog, saving = false, added = 0;
     const recordsByPlayer = /* @__PURE__ */ new Map(), savedVideos = /* @__PURE__ */ new Map(), dateCache = /* @__PURE__ */ new Map();
-    const toolbar = el("div", void 0, { className: "toolbar" });
+    const toolbar = el("div", void 0, { className: "toolbar", hidden: true });
     const state = el("span", "先连接管理员账号", { className: "muted", role: "status" });
     const count = el("span", "", { className: "muted" });
     const connect = el("button", "连接金榜", { type: "button" });
@@ -24802,7 +24803,10 @@ label{display:grid;align-content:start;gap:5px;font-size:13px}input,textarea{wid
     reload.onclick = () => loadCatalog(true).catch((error) => {
       state.textContent = error.message;
     });
-    gm2.registerMenuCommand("连接 CN 金榜管理员", () => connect.click());
+    gm2.registerMenuCommand("连接 CN 金榜管理员", () => {
+      toolbar.hidden = false;
+      connect.click();
+    });
     async function loadCatalog(force = false) {
       if (catalogPromise) return catalogPromise;
       if (catalog && !force) return catalog;
@@ -24901,6 +24905,7 @@ label{display:grid;align-content:start;gap:5px;font-size:13px}input,textarea{wid
       } };
     }
     async function openForm(video, button) {
+      toolbar.hidden = false;
       if (saving) return;
       button.disabled = true;
       try {
@@ -25186,12 +25191,15 @@ label{display:grid;align-content:start;gap:5px;font-size:13px}input,textarea{wid
       if (!host) {
         host = el("div");
         host.dataset.cngistVideoButton = "";
+        host.style.setProperty("margin-right", "20px", "important");
+        host.style.setProperty("flex-shrink", "0");
         const shadow = host.attachShadow({ mode: "open" });
         shadow.append(el("style", ":host{display:inline-flex;align-items:center;flex:0 0 auto;margin-right:16px}button{font:14px/22px system-ui;white-space:nowrap;color:#287ac7;border:1px solid #719dcc66;background:#e7f1ff;border-radius:5px;padding:4px 10px;cursor:pointer}button:disabled{opacity:.5;cursor:default}"));
         const button2 = el("button", "添加到金榜", { type: "button" });
         button2.onclick = (event) => {
           event.preventDefault();
           event.stopPropagation();
+          toolbar.hidden = false;
           const current = videoPageReader();
           if (current) void openForm(current, button2);
           else state.textContent = "当前视频信息尚未就绪，请稍后重试或刷新页面。";

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CN 金榜 · B站搜索补录
 // @namespace    https://cngist.com/
-// @version      1.0.3
+// @version      1.0.4
 // @updateURL    https://raw.githubusercontent.com/Diving-Fish/CNGoldenClip/main/dist/cngoldenclip.meta.js
 // @downloadURL  https://raw.githubusercontent.com/Diving-Fish/CNGoldenClip/main/dist/cngoldenclip.user.js
 // @homepageURL  https://github.com/Diving-Fish/CNGoldenClip
