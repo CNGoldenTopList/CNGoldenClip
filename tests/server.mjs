@@ -19,6 +19,7 @@ const html = body => `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><t
 const server = createServer(async (req, res) => {
   const path = new URL(req.url, 'http://localhost').pathname;
   const json = (value, status = 200) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(value)); };
+  if (path.startsWith('/video/')) return res.end(html(`<meta property="og:url" content="https://www.bilibili.com/video/BV1xx411c7mD/"><meta property="video:release_date" content="2026-09-16T16:00:00Z"><h1 class="video-title" title="测试地图 金草莓">测试地图 金草莓</h1><div class="up-info-container"><a class="up-name" href="https://space.bilibili.com/202/">测试UP主</a></div><div style="height:200px;background:#ddd">本地播放器占位</div><div id="arc_toolbar_report" style="display:flex;justify-content:space-between;align-items:center"><span>点赞　投币　收藏　分享</span><div class="video-toolbar-right" style="display:flex;align-items:center"><div class="video-complaint">稿件举报</div><div style="margin-left:16px">记笔记</div></div></div>`));
   if (path === '/harness.js') { res.writeHead(200, { 'content-type': 'text/javascript' }); return res.end(js); }
   if (path === '/fixture/video') return res.end('<meta property="og:url" content="https://www.bilibili.com/video/BV1xx411c7mD/"><meta property="video:release_date" content="2026-09-16T16:00:00Z">');
   if (path === '/api/auth/session') return json({ account: { role: 'admin', displayName: '本地测试管理员' } });

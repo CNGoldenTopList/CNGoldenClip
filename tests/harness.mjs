@@ -16,4 +16,6 @@ const gm = {
   }, registerMenuCommand() {},
   xmlhttpRequest: options => fetch('/fixture/video').then(r => r.text()).then(responseText => options.onload({ status: 200, responseText, finalUrl: options.url })).catch(options.onerror),
 };
-void start({ gm, origin: location.origin, role: location.pathname === '/search' ? 'search' : 'bridge', searchable, challengeName: challengeDisplayName });
+import { readVideoPage } from '../src/core.mjs';
+void start({ gm, origin: location.origin, role: location.pathname === '/search' ? 'search' : location.pathname.startsWith('/video/') ? 'video' : 'bridge', searchable, challengeName: challengeDisplayName,
+  videoPageReader: () => readVideoPage(document, `https://www.bilibili.com${location.pathname}${location.search}`) });

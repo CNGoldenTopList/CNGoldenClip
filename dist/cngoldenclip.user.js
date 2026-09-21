@@ -1,13 +1,14 @@
 // ==UserScript==
 // @name         CN 金榜 · B站搜索补录
 // @namespace    https://cngist.com/
-// @version      1.0.2
+// @version      1.0.3
 // @updateURL    https://raw.githubusercontent.com/Diving-Fish/CNGoldenClip/main/dist/cngoldenclip.meta.js
 // @downloadURL  https://raw.githubusercontent.com/Diving-Fish/CNGoldenClip/main/dist/cngoldenclip.user.js
 // @homepageURL  https://github.com/Diving-Fish/CNGoldenClip
 // @supportURL   https://github.com/Diving-Fish/CNGoldenClip/issues
 // @description  搜索页匹配金榜玩家、预填视频和发布日期，提示已有记录，复用管理员补录接口。
 // @match        https://search.bilibili.com/*
+// @match        https://www.bilibili.com/video/*
 // @match        https://cngist.com/*
 // @run-at       document-idle
 // @noframes
@@ -24499,6 +24500,22 @@
       date: fullCardDate(card.querySelector(".bili-video-card__info--date, .so-icon.time")?.textContent)
     };
   }
+  function readVideoPage(doc, href) {
+    const canonical = doc.querySelector('meta[property="og:url"]')?.content;
+    const video = videoRef(href);
+    if (!video || canonical && videoRef(canonical)?.bv !== video.bv) return null;
+    const owner = doc.querySelector('.up-info-container a.up-name[href*="space.bilibili.com/"]');
+    const title = doc.querySelector("h1.video-title");
+    if (!owner || !title) return null;
+    const uid = owner.getAttribute("href")?.match(/space\.bilibili\.com\/(\d+)/)?.[1] || "";
+    return {
+      ...video,
+      uid,
+      author: owner.textContent.trim(),
+      title: title.getAttribute("title") || title.textContent.trim(),
+      date: dateFromVideoDocument(doc, video.bv)
+    };
+  }
   function dateFromVideoDocument(doc, bv) {
     const canonical = doc.querySelector('meta[property="og:url"]')?.content;
     if (canonical && videoRef(canonical)?.bv !== bv) return "";
@@ -24755,7 +24772,7 @@ label{display:grid;align-content:start;gap:5px;font-size:13px}input,textarea{wid
       ontimeout: () => reject(new Error("视频页面请求超时"))
     }));
   }
-  async function start({ gm: gm2, origin = "https://cngist.com", role, searchable: searchable2, challengeName, videoLoader = loadVideoDate }) {
+  async function start({ gm: gm2, origin = "https://cngist.com", role, searchable: searchable2, challengeName, videoLoader = loadVideoDate, videoPageReader = () => readVideoPage(document, location.href) }) {
     if (role === "bridge") {
       let notice;
       await startBridge(gm2, origin, (text) => {
@@ -24767,7 +24784,7 @@ label{display:grid;align-content:start;gap:5px;font-size:13px}input,textarea{wid
       });
       return;
     }
-    if (role !== "search") return;
+    if (!["search", "video"].includes(role)) return;
     const root = mount(), client = makeClient(gm2, origin);
     let catalog, catalogPromise, choices = [], activeDialog, saving = false, added = 0;
     const recordsByPlayer = /* @__PURE__ */ new Map(), savedVideos = /* @__PURE__ */ new Map(), dateCache = /* @__PURE__ */ new Map();
@@ -24948,7 +24965,7 @@ label{display:grid;align-content:start;gap:5px;font-size:13px}input,textarea{wid
       panel.append(playerPicker.wrap, challengePicker.wrap, duplicateLine, recordList);
       const grid = el("div", void 0, { className: "grid" });
       const dateLabel = el("label", "达成日期（默认视频发布日期）"), date = el("input", void 0, { type: "date", value: video.date || "" });
-      const dateHint = el("span", video.date ? "已从搜索卡片读取发布日期，可修改。" : "正在读取准确发布日期…", { className: "hint" });
+      const dateHint = el("span", video.date ? "已从页面读取发布日期，可修改。" : "正在读取准确发布日期…", { className: "hint" });
       dateLabel.append(date, dateHint);
       const urlLabel = el("label", "挑战视频链接"), url = el("input", void 0, { type: "url", value: video.url });
       urlLabel.append(url);
@@ -25110,13 +25127,18 @@ label{display:grid;align-content:start;gap:5px;font-size:13px}input,textarea{wid
       }
     }
     function scan() {
+      if (role === "video") {
+        scanVideoPage();
+        return;
+      }
       for (const card of document.querySelectorAll(".bili-video-card, .video-item")) {
         const video = readCard(card);
         if (!video) continue;
         let host = card.querySelector("[data-cngist-button]");
         if (host?.dataset.video === video.key) {
           const btn = host.shadowRoot?.querySelector("button");
-          if (btn) btn.textContent = savedVideos.get(video.key) || "添加到金榜";
+          const text = savedVideos.get(video.key) || "添加到金榜";
+          if (btn && btn.textContent !== text) btn.textContent = text;
           continue;
         }
         host?.remove();
@@ -25154,6 +25176,34 @@ label{display:grid;align-content:start;gap:5px;font-size:13px}input,textarea{wid
         } else card.append(host);
       }
     }
+    function scanVideoPage() {
+      const report = document.querySelector("#arc_toolbar_report .video-toolbar-right > .video-complaint");
+      let host = document.querySelector("[data-cngist-video-button]");
+      if (!report) {
+        host?.remove();
+        return;
+      }
+      if (!host) {
+        host = el("div");
+        host.dataset.cngistVideoButton = "";
+        const shadow = host.attachShadow({ mode: "open" });
+        shadow.append(el("style", ":host{display:inline-flex;align-items:center;flex:0 0 auto;margin-right:16px}button{font:14px/22px system-ui;white-space:nowrap;color:#287ac7;border:1px solid #719dcc66;background:#e7f1ff;border-radius:5px;padding:4px 10px;cursor:pointer}button:disabled{opacity:.5;cursor:default}"));
+        const button2 = el("button", "添加到金榜", { type: "button" });
+        button2.onclick = (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const current = videoPageReader();
+          if (current) void openForm(current, button2);
+          else state.textContent = "当前视频信息尚未就绪，请稍后重试或刷新页面。";
+        };
+        shadow.append(button2);
+      }
+      if (host.nextElementSibling !== report) report.before(host);
+      const video = videoPageReader();
+      const button = host.shadowRoot.querySelector("button");
+      const text = video && savedVideos.get(video.key) || "添加到金榜";
+      if (button.textContent !== text) button.textContent = text;
+    }
     let scheduled = false;
     new MutationObserver(() => {
       if (scheduled) return;
@@ -25183,6 +25233,6 @@ label{display:grid;align-content:start;gap:5px;font-size:13px}input,textarea{wid
     gm,
     searchable,
     challengeName: challengeDisplayName,
-    role: location.hostname === "search.bilibili.com" ? "search" : location.origin === "https://cngist.com" ? "bridge" : null
+    role: location.hostname === "search.bilibili.com" ? "search" : location.hostname === "www.bilibili.com" && location.pathname.startsWith("/video/") ? "video" : location.origin === "https://cngist.com" ? "bridge" : null
   }).catch((error) => console.error("[CN 金榜补录]", error));
 })();

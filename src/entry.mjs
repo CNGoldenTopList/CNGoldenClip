@@ -9,5 +9,5 @@ const gm = {
   registerMenuCommand: GM_registerMenuCommand, xmlhttpRequest: GM_xmlhttpRequest,
 };
 void start({ gm, searchable, challengeName: challengeDisplayName,
-  role: location.hostname === 'search.bilibili.com' ? 'search' : location.origin === 'https://cngist.com' ? 'bridge' : null,
+  role: location.hostname === 'search.bilibili.com' ? 'search' : location.hostname === 'www.bilibili.com' && location.pathname.startsWith('/video/') ? 'video' : location.origin === 'https://cngist.com' ? 'bridge' : null,
 }).catch(error => console.error('[CN 金榜补录]', error));

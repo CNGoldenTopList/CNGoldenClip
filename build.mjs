@@ -16,6 +16,7 @@ const header = `// ==UserScript==
 // @supportURL   https://github.com/Diving-Fish/CNGoldenClip/issues
 // @description  搜索页匹配金榜玩家、预填视频和发布日期，提示已有记录，复用管理员补录接口。
 // @match        https://search.bilibili.com/*
+// @match        https://www.bilibili.com/video/*
 // @match        https://cngist.com/*
 // @run-at       document-idle
 // @noframes

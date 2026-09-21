@@ -1,4 +1,4 @@
-import { readCard, dateFromVideoDocument, videoRef, playerUids, mergeRecords, duplicates, submissionBody, statusNames } from './core.mjs';
+import { readCard, readVideoPage, dateFromVideoDocument, videoRef, playerUids, mergeRecords, duplicates, submissionBody, statusNames } from './core.mjs';
 import { makeClient, startBridge } from './transport.mjs';
 import { isRatedTier, tierBadgeLabel } from './vendor/tiers.ts';
 
@@ -39,7 +39,7 @@ export function loadVideoDate(gm, video) {
   }));
 }
 
-export async function start({ gm, origin = 'https://cngist.com', role, searchable, challengeName, videoLoader = loadVideoDate }) {
+export async function start({ gm, origin = 'https://cngist.com', role, searchable, challengeName, videoLoader = loadVideoDate, videoPageReader = () => readVideoPage(document, location.href) }) {
   if (role === 'bridge') {
     let notice;
     await startBridge(gm, origin, text => {
@@ -48,7 +48,7 @@ export async function start({ gm, origin = 'https://cngist.com', role, searchabl
     });
     return;
   }
-  if (role !== 'search') return;
+  if (!['search', 'video'].includes(role)) return;
   const root = mount(), client = makeClient(gm, origin);
   let catalog, catalogPromise, choices = [], activeDialog, saving = false, added = 0;
   const recordsByPlayer = new Map(), savedVideos = new Map(), dateCache = new Map();
@@ -153,7 +153,7 @@ export async function start({ gm, origin = 'https://cngist.com', role, searchabl
     panel.append(playerPicker.wrap, challengePicker.wrap, duplicateLine, recordList);
     const grid = el('div', undefined, { className: 'grid' });
     const dateLabel = el('label', '达成日期（默认视频发布日期）'), date = el('input', undefined, { type: 'date', value: video.date || '' });
-    const dateHint = el('span', video.date ? '已从搜索卡片读取发布日期，可修改。' : '正在读取准确发布日期…', { className: 'hint' });
+    const dateHint = el('span', video.date ? '已从页面读取发布日期，可修改。' : '正在读取准确发布日期…', { className: 'hint' });
     dateLabel.append(date, dateHint);
     const urlLabel = el('label', '挑战视频链接'), url = el('input', undefined, { type: 'url', value: video.url }); urlLabel.append(url);
     grid.append(dateLabel, urlLabel); panel.append(grid);
@@ -247,12 +247,15 @@ export async function start({ gm, origin = 'https://cngist.com', role, searchabl
     }
   }
   function scan() {
+    if (role === 'video') { scanVideoPage(); return; }
     for (const card of document.querySelectorAll('.bili-video-card, .video-item')) {
       const video = readCard(card);
       if (!video) continue;
       let host = card.querySelector('[data-cngist-button]');
       if (host?.dataset.video === video.key) {
-        const btn = host.shadowRoot?.querySelector('button'); if (btn) btn.textContent = savedVideos.get(video.key) || '添加到金榜';
+        const btn = host.shadowRoot?.querySelector('button');
+        const text = savedVideos.get(video.key) || '添加到金榜';
+        if (btn && btn.textContent !== text) btn.textContent = text;
         continue;
       }
       host?.remove(); host = el('div'); host.dataset.cngistButton = ''; host.dataset.video = video.key;
@@ -279,6 +282,29 @@ export async function start({ gm, origin = 'https://cngist.com', role, searchabl
         row.append(host);
       } else card.append(host);
     }
+  }
+  function scanVideoPage() {
+    const report = document.querySelector('#arc_toolbar_report .video-toolbar-right > .video-complaint');
+    let host = document.querySelector('[data-cngist-video-button]');
+    if (!report) { host?.remove(); return; }
+    if (!host) {
+      host = el('div'); host.dataset.cngistVideoButton = '';
+      const shadow = host.attachShadow({ mode: 'open' });
+      shadow.append(el('style', ':host{display:inline-flex;align-items:center;flex:0 0 auto;margin-right:16px}button{font:14px/22px system-ui;white-space:nowrap;color:#287ac7;border:1px solid #719dcc66;background:#e7f1ff;border-radius:5px;padding:4px 10px;cursor:pointer}button:disabled{opacity:.5;cursor:default}'));
+      const button = el('button', '添加到金榜', { type: 'button' });
+      button.onclick = event => {
+        event.preventDefault(); event.stopPropagation();
+        const current = videoPageReader();
+        if (current) void openForm(current, button);
+        else state.textContent = '当前视频信息尚未就绪，请稍后重试或刷新页面。';
+      };
+      shadow.append(button);
+    }
+    if (host.nextElementSibling !== report) report.before(host);
+    const video = videoPageReader();
+    const button = host.shadowRoot.querySelector('button');
+    const text = (video && savedVideos.get(video.key)) || '添加到金榜';
+    if (button.textContent !== text) button.textContent = text;
   }
   let scheduled = false;
   new MutationObserver(() => {

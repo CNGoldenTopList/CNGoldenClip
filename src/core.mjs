@@ -64,6 +64,20 @@ export function readCard(card) {
   };
 }
 
+export function readVideoPage(doc, href) {
+  const canonical = doc.querySelector('meta[property="og:url"]')?.content;
+  const video = videoRef(href);
+  if (!video || (canonical && videoRef(canonical)?.bv !== video.bv)) return null;
+  // Scope to the uploader panel: descriptions and recommendations also contain UID links.
+  const owner = doc.querySelector('.up-info-container a.up-name[href*="space.bilibili.com/"]');
+  const title = doc.querySelector('h1.video-title');
+  if (!owner || !title) return null;
+  const uid = owner.getAttribute('href')?.match(/space\.bilibili\.com\/(\d+)/)?.[1] || '';
+  return { ...video, uid, author: owner.textContent.trim(),
+    title: title.getAttribute('title') || title.textContent.trim(),
+    date: dateFromVideoDocument(doc, video.bv) };
+}
+
 export function dateFromVideoDocument(doc, bv) {
   const canonical = doc.querySelector('meta[property="og:url"]')?.content;
   if (canonical && videoRef(canonical)?.bv !== bv) return '';

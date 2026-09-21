@@ -1,7 +1,24 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { videoRef, fullCardDate, validDate, beijingDate, playerUids, mergeRecords, duplicates, submissionBody } from '../src/core.mjs';
+import { readVideoPage, videoRef, fullCardDate, validDate, beijingDate, playerUids, mergeRecords, duplicates, submissionBody } from '../src/core.mjs';
 import { makeClient, startBridge, keyOf } from '../src/transport.mjs';
+
+test('播放页保留分 P，读取 UP 主与北京时间日期，拒绝切换期间不一致的页面', () => {
+  const elements = {
+    'meta[property="og:url"]': { content: 'https://www.bilibili.com/video/BV1xx411c7mD/' },
+    'meta[property="video:release_date"], meta[itemprop="datePublished"]': { content: '2026-09-16T16:00:00Z' },
+    '.up-info-container a.up-name[href*="space.bilibili.com/"]': { textContent: ' UP主 ', getAttribute: () => '//space.bilibili.com/202/' },
+    'h1.video-title': { textContent: '视频标题', getAttribute: () => '视频标题' },
+  };
+  const doc = { querySelector: selector => elements[selector] };
+  const video = readVideoPage(doc, 'https://www.bilibili.com/video/BV1xx411c7mD/?p=2&spm=tracking');
+  assert.equal(video.url, 'https://www.bilibili.com/video/BV1xx411c7mD?p=2');
+  assert.equal(video.uid, '202');
+  assert.equal(video.date, '2026-09-17');
+  assert.equal(readVideoPage(doc, 'https://www.bilibili.com/video/BV1Dp4y1D7QR/'), null);
+  delete elements['.up-info-container a.up-name[href*="space.bilibili.com/"]'];
+  assert.equal(readVideoPage(doc, video.url), null);
+});
 
 test('按玩家与挑战提示重复，公共/管理记录按 ID 合并，不混入其他玩家和挑战', () => {
   const url = 'https://www.bilibili.com/video/BV1xx411c7mD';
