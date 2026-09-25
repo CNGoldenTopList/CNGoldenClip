@@ -1,11 +1,11 @@
 // ==UserScript==
 // @name         CN 金榜 · B站搜索补录
 // @namespace    https://cngist.com/
-// @version      1.0.4
-// @updateURL    https://raw.githubusercontent.com/Diving-Fish/CNGoldenClip/main/dist/cngoldenclip.meta.js
-// @downloadURL  https://raw.githubusercontent.com/Diving-Fish/CNGoldenClip/main/dist/cngoldenclip.user.js
-// @homepageURL  https://github.com/Diving-Fish/CNGoldenClip
-// @supportURL   https://github.com/Diving-Fish/CNGoldenClip/issues
+// @version      1.1.1
+// @updateURL    https://raw.githubusercontent.com/CNGoldenTopList/CNGoldenClip/main/dist/cngoldenclip.meta.js
+// @downloadURL  https://raw.githubusercontent.com/CNGoldenTopList/CNGoldenClip/main/dist/cngoldenclip.user.js
+// @homepageURL  https://github.com/CNGoldenTopList/CNGoldenClip
+// @supportURL   https://github.com/CNGoldenTopList/CNGoldenClip/issues
 // @description  搜索页匹配金榜玩家、预填视频和发布日期，提示已有记录，复用管理员补录接口。
 // @match        https://search.bilibili.com/*
 // @match        https://www.bilibili.com/video/*
@@ -15,14 +15,11 @@
 // @grant        GM_getValue
 // @grant        GM_setValue
 // @grant        GM_deleteValue
-// @grant        GM_addValueChangeListener
-// @grant        GM_removeValueChangeListener
-// @grant        GM_getTab
-// @grant        GM_saveTab
 // @grant        GM_openInTab
 // @grant        GM_registerMenuCommand
 // @grant        GM_xmlhttpRequest
 // @connect      www.bilibili.com
+// @connect      cngist.com
 // ==/UserScript==
 (() => {
   // node_modules/pinyin-pro/dist/esm/common/constant.mjs
@@ -24525,145 +24522,180 @@
   }
 
   // src/transport.mjs
-  var prefix = "cngist-intake-v1:";
-  var keyOf = (channel, part) => `${prefix}${channel}:${part}`;
+  var TOKEN_KEY = "cngoldenclip:submission-token:v1";
+  var authorizationError = (message) => Object.assign(new Error(message), { code: "authorization_required" });
+  function startAuthorization(gm2, origin, fetcher = fetch) {
+    if (location.origin !== origin) return;
+    const root = document.documentElement;
+    root.setAttribute("data-cngoldenclip-ready", "2");
+    let busy = false;
+    const status = (state, error = "") => {
+      root.setAttribute("data-cngoldenclip-auth-state", state);
+      root.setAttribute("data-cngoldenclip-auth-error", error);
+      window.dispatchEvent(new Event("cngoldenclip-auth-state"));
+    };
+    document.addEventListener("click", async (event) => {
+      if (!event.isTrusted || location.pathname !== "/admin/submission_token") return;
+      if (!event.target.closest?.("button[data-cngoldenclip-authorize]") || busy) return;
+      busy = true;
+      status("pending");
+      try {
+        const response = await fetcher(`${origin}/api/admin/submission-token`, {
+          method: "POST",
+          credentials: "same-origin",
+          cache: "no-store",
+          redirect: "error",
+          signal: AbortSignal.timeout(25e3)
+        });
+        const data = await response.json();
+        if (!response.ok || data.ok === false) throw new Error(data.error || "授权失败，请重试。");
+        if (!/^cngclip_[A-Za-z0-9_-]{43}$/.test(data.token || "") || !(Date.parse(data.expiresAt) > Date.now())) throw new Error("授权响应无效，请重试。");
+        const saved = { token: data.token, expiresAt: data.expiresAt };
+        gm2.setValue(TOKEN_KEY, saved);
+        if (gm2.getValue(TOKEN_KEY)?.token !== saved.token) throw new Error("写入油猴存储失败，请检查脚本权限。");
+        status("success");
+      } catch (error) {
+        status("error", error.message || "授权失败，请重试。");
+      } finally {
+        busy = false;
+      }
+    }, true);
+  }
   function makeClient(gm2, origin) {
-    let channel = "", queue = Promise.resolve();
-    const listeners = /* @__PURE__ */ new Set();
-    const ready = new Promise((resolve) => gm2.getTab((tab) => {
-      channel = tab.cngistIntakeChannel ||= crypto.randomUUID();
-      gm2.saveTab(tab);
-      resolve();
-    }));
-    async function send(action, payload = {}) {
-      await ready;
-      if (!gm2.getValue(keyOf(channel, "enabled"))) throw new Error("请先点“连接金榜”，在打开的页面登录管理员。");
-      const id = crypto.randomUUID();
-      const requestKey = keyOf(channel, "request"), responseKey = keyOf(channel, "response");
+    const authorization = () => {
+      const saved = gm2.getValue(TOKEN_KEY);
+      if (!saved || !/^cngclip_[A-Za-z0-9_-]{43}$/.test(saved.token || "") || !(Date.parse(saved.expiresAt) > Date.now())) {
+        throw authorizationError("尚未授权，请到金榜点击“一键授权”。");
+      }
+      return saved;
+    };
+    function api(path, body, token) {
       return new Promise((resolve, reject) => {
-        let finished = false;
-        const check = () => {
-          const reply = gm2.getValue(responseKey);
-          if (reply?.id !== id || finished) return;
-          finish();
-          gm2.deleteValue(responseKey);
-          if (reply.ok) resolve(reply.data);
-          else reject(new Error(reply.error || "金榜请求失败。"));
-        };
-        const listener = gm2.addValueChangeListener(responseKey, check);
-        const poll = setInterval(check, 500);
-        const timeout = setTimeout(() => {
-          finish();
-          if (gm2.getValue(requestKey)?.id === id) gm2.deleteValue(requestKey);
-          reject(new Error(action === "submit" ? "未收到保存结果，请先刷新重复检查或到后台核对，勿直接重复提交。" : "金榜连接未响应，请打开连接页，登录后再点“载入金榜”。"));
-        }, action === "ping" ? 4e3 : 35e3);
-        function finish() {
+        const uncertain = "保存结果不确定，请先刷新重复检查或到金榜后台核对，勿直接重复提交。";
+        let finished = false, request;
+        const finish = (error, data) => {
+          if (finished) return;
           finished = true;
-          clearInterval(poll);
-          clearTimeout(timeout);
-          gm2.removeValueChangeListener(listener);
-          listeners.delete(finish);
+          clearTimeout(timer);
+          error ? reject(error) : resolve(data);
+        };
+        const fail = () => finish(new Error(body ? uncertain : "记录或目录读取失败，请重试。"));
+        const timer = setTimeout(() => {
+          fail();
+          request?.abort?.();
+        }, 25e3);
+        try {
+          request = gm2.xmlhttpRequest({
+            method: body ? "POST" : "GET",
+            url: `${origin}${path}`,
+            anonymous: true,
+            redirect: "error",
+            timeout: 25e3,
+            headers: { ...body ? { "Content-Type": "application/json" } : {}, ...token ? { Authorization: `Bearer ${token}` } : {} },
+            ...body ? { data: JSON.stringify(body) } : {},
+            onload(response) {
+              if (finished) return;
+              let data;
+              try {
+                data = JSON.parse(response.responseText);
+              } catch {
+                fail();
+                return;
+              }
+              if (response.status < 200 || response.status >= 300 || !data || data.ok === false) {
+                if (response.status === 401 && token && gm2.getValue(TOKEN_KEY)?.token === token) gm2.deleteValue(TOKEN_KEY);
+                const message = response.status >= 500 && body ? uncertain : data?.error || `请求失败（${response.status}）`;
+                finish(response.status === 401 && token ? authorizationError(message) : new Error(message));
+                return;
+              }
+              if (body && !data.record?.id) {
+                fail();
+                return;
+              }
+              finish(null, data);
+            },
+            onerror: fail,
+            ontimeout: fail,
+            onabort: fail
+          });
+        } catch {
+          fail();
         }
-        listeners.add(finish);
-        gm2.setValue(requestKey, { id, action, payload, at: Date.now() });
-        check();
       });
     }
     return {
       async open() {
-        await ready;
-        gm2.setValue(keyOf(channel, "enabled"), true);
-        const owner = crypto.randomUUID();
-        gm2.setValue(keyOf(channel, "owner"), owner);
-        gm2.openInTab(`${origin}/account#cngist-intake=${channel}&owner=${owner}`, { active: true, insert: true, setParent: true });
+        gm2.openInTab(`${origin}/admin/submission_token`, { active: true, insert: true, setParent: true });
       },
-      request(action, payload) {
-        const next = queue.then(() => send(action, payload));
-        queue = next.catch(() => {
-        });
-        return next;
+      hasAuthorization() {
+        try {
+          authorization();
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      async request(action, payload = {}) {
+        if (action === "verify") {
+          const data = await api("/api/clip/authorization", void 0, authorization().token);
+          if (data.ok !== true) throw new Error("授权验证响应无效，请稍后重试。");
+          return data;
+        }
+        if (action === "catalog") return api("/api/catalog");
+        if (action === "records") {
+          if (!Number.isSafeInteger(payload.playerId) || payload.playerId < 1) throw new Error("玩家编号无效。");
+          const results = await Promise.allSettled([
+            api(`/api/records?playerId=${payload.playerId}`),
+            Promise.resolve().then(() => api(`/api/clip/submissions?playerId=${payload.playerId}`, void 0, authorization().token))
+          ]);
+          const data = { publicRecords: [], adminRecords: [], warnings: [] };
+          if (results[0].status === "fulfilled" && Array.isArray(results[0].value.records)) data.publicRecords = results[0].value.records;
+          else data.warnings.push("已有成绩读取失败");
+          if (results[1].status === "fulfilled" && Array.isArray(results[1].value.data)) data.adminRecords = results[1].value.data.filter((r) => r.playerId === payload.playerId);
+          else data.warnings.push(results[1].status === "rejected" ? `待审核记录读取失败：${results[1].reason.message}` : "待审核记录读取失败");
+          return data;
+        }
+        if (action === "submit") {
+          const { token } = authorization();
+          const { playerId, challengeId, videoUrl, achievedAt, rawVideoUrl = "", playerNote = "" } = payload;
+          return api("/api/clip/submissions", { playerId, challengeId, videoUrl, achievedAt, rawVideoUrl, playerNote }, token);
+        }
+        throw new Error("未知操作。");
       }
     };
   }
-  async function startBridge(gm2, origin, notice, fetcher = fetch) {
-    const hash = new URLSearchParams(location.hash.slice(1));
-    const tab = await new Promise((resolve) => gm2.getTab(resolve));
-    if (hash.has("cngist-intake")) {
-      tab.cngistBridge = { channel: hash.get("cngist-intake"), owner: hash.get("owner") };
-      gm2.saveTab(tab);
-    }
-    const { channel, owner } = tab.cngistBridge || {};
-    if (!channel || !owner || !/^[\da-f-]{36}$/.test(channel) || !gm2.getValue(keyOf(channel, "enabled"))) return;
-    const active = () => gm2.getValue(keyOf(channel, "owner")) === owner;
-    if (!active()) return;
-    notice("金榜补录连接页：保持此页打开，登录管理员后回到 B 站点“载入金榜”。");
-    async function api(path, body) {
-      const response = await fetcher(`${origin}${path}`, {
-        credentials: "same-origin",
-        cache: "no-store",
-        signal: AbortSignal.timeout(25e3),
-        ...body ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : {}
-      });
-      const data = await response.json().catch(() => null);
-      if (!response.ok || data?.ok === false || !data) throw new Error(data?.error || `请求失败（${response.status}）`);
-      return data;
-    }
-    let queue = Promise.resolve();
-    const requestKey = keyOf(channel, "request");
-    const consume = () => {
-      const req = gm2.getValue(requestKey);
-      if (!active() || !req || typeof req.id !== "string" || Date.now() - req.at > 35e3) return;
-      gm2.deleteValue(requestKey);
-      queue = queue.then(async () => {
-        if (!active()) return;
+
+  // src/intake.mjs
+  async function prepareIntake(client, button, loadCatalog) {
+    if (button.disabled) return false;
+    const label = button.textContent === "加载失败，点击重试" ? "添加到金榜" : button.textContent;
+    button.disabled = true;
+    button.setAttribute("aria-busy", "true");
+    button.textContent = "正在验证授权…";
+    button.title = "";
+    try {
+      await client.request("verify");
+      button.textContent = "正在加载…";
+      await loadCatalog();
+      return true;
+    } catch (error) {
+      if (error.code === "authorization_required") {
+        button.title = "请在金榜页面点击“一键授权”，完成后回来再次添加。";
         try {
-          const session = await api("/api/auth/session");
-          if (!["admin", "super_admin"].includes(session.account?.role)) throw new Error("请在金榜连接页登录管理员账号。");
-          let data;
-          if (req.action === "ping") data = { name: session.account.displayName };
-          else if (req.action === "catalog") {
-            const catalog = await api("/api/catalog");
-            data = {
-              players: catalog.players,
-              campaigns: catalog.campaigns,
-              maps: catalog.maps,
-              challenges: catalog.challenges,
-              multiMapChallenges: catalog.multiMapChallenges,
-              adminName: session.account.displayName
-            };
-          } else if (req.action === "records") {
-            const id = req.payload?.playerId;
-            if (!Number.isSafeInteger(id) || id < 1) throw new Error("玩家编号无效。");
-            const results = await Promise.allSettled([api(`/api/records?playerId=${id}`), api("/api/admin/submissions")]);
-            data = { publicRecords: [], adminRecords: [], warnings: [] };
-            if (results[0].status === "fulfilled" && Array.isArray(results[0].value.records)) data.publicRecords = results[0].value.records;
-            else data.warnings.push("已有成绩读取失败");
-            if (results[1].status === "fulfilled" && Array.isArray(results[1].value.data)) data.adminRecords = results[1].value.data.filter((r) => r.playerId === id);
-            else data.warnings.push("待审核记录读取失败");
-          } else if (req.action === "submit") {
-            const body = req.payload;
-            if (!body || !Number.isSafeInteger(body.playerId) || !Number.isSafeInteger(body.challengeId) || !["pending", "rejected"].includes(body.status)) throw new Error("补录参数无效。");
-            data = await api("/api/admin/submissions", {
-              playerId: body.playerId,
-              challengeId: body.challengeId,
-              status: body.status,
-              videoUrl: body.videoUrl,
-              achievedAt: body.achievedAt,
-              rawVideoUrl: body.rawVideoUrl || "",
-              playerNote: body.playerNote || ""
-            });
-            if (!data.record?.id) throw new Error("响应未包含记录编号，请到后台核对保存结果。");
-          } else throw new Error("未知操作。");
-          gm2.setValue(keyOf(channel, "response"), { id: req.id, ok: true, data });
-          notice(`已连接：${session.account.displayName}。请保持此页打开，在 B 站完成录入。`);
-        } catch (error) {
-          gm2.setValue(keyOf(channel, "response"), { id: req.id, ok: false, error: req.action === "submit" ? `${error.message} 如请求已发出，请先刷新重复检查或到后台核对。` : error.message });
-          notice(error.message);
+          await client.open();
+        } catch {
+          button.title = "无法打开授权页，请访问 https://cngist.com/admin/submission_token 完成一键授权。";
         }
-      }).catch((error) => notice(error.message));
-    };
-    gm2.addValueChangeListener(requestKey, consume);
-    consume();
+      } else {
+        button.title = error.message;
+        button.textContent = "加载失败，点击重试";
+      }
+      return false;
+    } finally {
+      if (button.textContent !== "加载失败，点击重试") button.textContent = label;
+      button.disabled = false;
+      button.removeAttribute("aria-busy");
+    }
   }
 
   // src/vendor/tiers.ts
@@ -24724,8 +24756,6 @@
 button{border:1px solid #414852;background:#252c37;color:#e4e7ed;border-radius:6px;padding:6px 10px;cursor:pointer}
 button:hover{background:#343f50}button:disabled{opacity:.5;cursor:default}button.primary{background:#276cc8;border-color:#488ced;color:white}
 button:focus-visible,a:focus-visible{outline:2px solid #75b5ff;outline-offset:2px}a{color:#85b8ff;text-decoration:none}
-.toolbar{position:fixed;right:24px;bottom:24px;z-index:2147483645;padding:10px 12px;background:#181e28;border:1px solid #414852;border-radius:10px;box-shadow:0 4px 20px #0005;display:flex;gap:8px;align-items:center;flex-wrap:wrap;max-width:calc(100vw - 32px)}
-.toolbar[hidden]{display:none}
 .brand{color:#e9c474;font-weight:650}.muted,.hint{font-size:12px;color:#aab4c4}.error{color:#ffaaaa}.warning{color:#efd18d}
 dialog{color:inherit;background:#181e28;border:1px solid #495365;border-radius:12px;padding:0;width:660px;max-width:calc(100vw - 28px);max-height:90vh;box-shadow:0 12px 60px #0008}
 dialog::backdrop{background:#0008}.panel{padding:20px;display:grid;gap:14px}.head{display:flex;gap:14px;align-items:start;justify-content:space-between}.head h2{font-size:18px;margin:0}.video{font-size:14px;margin:4px 0;overflow-wrap:anywhere}
@@ -24733,8 +24763,8 @@ label{display:grid;align-content:start;gap:5px;font-size:13px}input,textarea{wid
 .grid{align-items:start}.grid>label{min-width:0}.grid input{height:40px;min-height:40px;line-height:22px}
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.picker{position:relative}.results{display:grid;gap:2px;margin-top:4px;max-height:180px;overflow:auto;border:1px solid #414852;border-radius:6px;background:#111822;padding:4px}.results[hidden]{display:none}.results button{text-align:left;border:0;background:transparent;border-radius:3px;padding:7px 9px}.results button:hover,.results button.active{background:#263d5c}
 .selected{font-size:12px;color:#91c7ff;overflow-wrap:anywhere;margin-top:4px;min-height:18px}.dup{font-size:12px;display:flex;gap:6px;align-items:baseline;flex-wrap:wrap;min-height:23px}.dup button{font-size:12px;padding:1px 6px}.records{padding:8px 10px;background:#111822;border-radius:6px;display:grid;gap:6px;font-size:12px;max-height:140px;overflow:auto}.records[hidden]{display:none}.records div{display:flex;gap:10px;flex-wrap:wrap}
-.footer{display:flex;gap:10px;align-items:center;justify-content:space-between;border-top:1px solid #353e4a;padding-top:14px}.footer .hint{flex:1}.extra{font-size:13px}.extra summary{cursor:pointer;color:#aab4c4}.extra label{margin-top:10px}.notice{position:fixed;bottom:20px;left:20px;right:20px;z-index:2147483647;padding:13px 16px;background:#192539;border:1px solid #668dc2;border-radius:8px}
-@media(max-width:520px){.grid{grid-template-columns:1fr}.panel{padding:14px}.toolbar{right:12px;bottom:12px}.footer{flex-wrap:wrap}}
+.footer{display:flex;gap:10px;align-items:center;justify-content:space-between;border-top:1px solid #353e4a;padding-top:14px}.footer .hint{flex:1}.extra{font-size:13px}.extra summary{cursor:pointer;color:#aab4c4}.extra label{margin-top:10px}
+@media(max-width:520px){.grid{grid-template-columns:1fr}.panel{padding:14px}.footer{flex-wrap:wrap}}
 `;
   function el(tag, text, props = {}) {
     const node = document.createElement(tag);
@@ -24775,45 +24805,21 @@ label{display:grid;align-content:start;gap:5px;font-size:13px}input,textarea{wid
   }
   async function start({ gm: gm2, origin = "https://cngist.com", role, searchable: searchable2, challengeName, videoLoader = loadVideoDate, videoPageReader = () => readVideoPage(document, location.href) }) {
     if (role === "bridge") {
-      let notice;
-      await startBridge(gm2, origin, (text) => {
-        if (!notice) {
-          notice = el("div", "", { className: "notice", role: "status" });
-          mount().append(notice);
-        }
-        notice.textContent = text;
-      });
+      startAuthorization(gm2, origin);
       return;
     }
     if (!["search", "video"].includes(role)) return;
     const root = mount(), client = makeClient(gm2, origin);
-    let catalog, catalogPromise, choices = [], activeDialog, saving = false, added = 0;
+    let catalog, catalogPromise, choices = [], activeDialog, saving = false;
     const recordsByPlayer = /* @__PURE__ */ new Map(), savedVideos = /* @__PURE__ */ new Map(), dateCache = /* @__PURE__ */ new Map();
-    const toolbar = el("div", void 0, { className: "toolbar", hidden: true });
-    const state = el("span", "先连接管理员账号", { className: "muted", role: "status" });
-    const count = el("span", "", { className: "muted" });
-    const connect = el("button", "连接金榜", { type: "button" });
-    const reload = el("button", "载入金榜", { type: "button" });
-    const review = link("去审核", `${origin}/admin?tab=pending`);
-    toolbar.append(el("span", "CN 金榜", { className: "brand" }), state, connect, reload, count, review);
-    root.append(toolbar);
-    connect.onclick = () => client.open().catch((error) => {
-      state.textContent = error.message;
-    });
-    reload.onclick = () => loadCatalog(true).catch((error) => {
-      state.textContent = error.message;
-    });
-    gm2.registerMenuCommand("连接 CN 金榜管理员", () => {
-      toolbar.hidden = false;
-      connect.click();
-    });
+    gm2.registerMenuCommand("授权 CN 金榜补录", () => client.open());
+    gm2.registerMenuCommand("清除本机补录授权", () => gm2.deleteValue(TOKEN_KEY));
+    gm2.registerMenuCommand("去金榜审核", () => gm2.openInTab(`${origin}/admin?tab=pending`, { active: true }));
     async function loadCatalog(force = false) {
       if (catalogPromise) return catalogPromise;
       if (catalog && !force) return catalog;
-      reload.disabled = true;
-      state.textContent = "正在载入…";
       catalogPromise = client.request("catalog").then((data) => {
-        for (const name of ["players", "campaigns", "maps", "challenges", "multiMapChallenges"]) if (!Array.isArray(data[name])) throw new Error("金榜目录格式不匹配，请刷新连接页。");
+        for (const name of ["players", "campaigns", "maps", "challenges", "multiMapChallenges"]) if (!Array.isArray(data[name])) throw new Error("金榜目录格式不匹配，请刷新目录。");
         catalog = data;
         const packs = new Map(data.campaigns.map((p) => [p.id, p]));
         const maps = new Map(data.maps.map((m) => [m.id, m]));
@@ -24829,14 +24835,9 @@ label{display:grid;align-content:start;gap:5px;font-size:13px}input,textarea{wid
             mapNames: [map2?.name, map2?.cnName].filter(Boolean)
           };
         });
-        state.textContent = `已连接 · ${data.adminName}`;
         return catalog;
-      }).catch((error) => {
-        state.textContent = error.message;
-        throw error;
       }).finally(() => {
         catalogPromise = null;
-        reload.disabled = false;
       });
       return catalogPromise;
     }
@@ -24905,17 +24906,8 @@ label{display:grid;align-content:start;gap:5px;font-size:13px}input,textarea{wid
       } };
     }
     async function openForm(video, button) {
-      toolbar.hidden = false;
       if (saving) return;
-      button.disabled = true;
-      try {
-        await loadCatalog();
-      } catch (error) {
-        state.textContent = `${error.message} 先点“连接金榜”。`;
-        return;
-      } finally {
-        button.disabled = false;
-      }
+      if (!await prepareIntake(client, button, loadCatalog)) return;
       activeDialog?.close();
       activeDialog?.remove();
       const dialog = activeDialog = el("dialog");
@@ -24994,11 +24986,11 @@ label{display:grid;align-content:start;gap:5px;font-size:13px}input,textarea{wid
       url.oninput = update;
       function update() {
         const player = playerPicker.value, goal = challengePicker.value;
-        submit.disabled = saving || !player || !goal;
+        submit.disabled = saving || !player || !goal || player.status === "blocked";
         const standard = ["high-std", "mid-std", "low-std"].includes(goal?.tier);
         const rejected = ["unwilling", "blocked"].includes(player?.status);
         submit.textContent = rejected ? "按玩家状态保存" : standard ? "添加记录（Standard）" : "加入待审核";
-        policy.textContent = rejected ? "该玩家不接受入榜，沿用后台规则保存为已拒绝。" : standard ? "Standard 按现有规则自动通过。" : "保存后进入待审核队列，稍后统一审核。";
+        policy.textContent = player?.status === "blocked" ? "该玩家禁止补录。" : rejected ? "该玩家不接受入榜，沿用后台规则保存为已拒绝。" : standard ? "Standard 按现有规则自动通过。" : "保存后进入待审核队列，稍后统一审核。";
         const found = player && goal ? duplicates(currentRecords, player.id, goal.id, url.value) : [];
         duplicateText.className = found.length || recordWarning ? "warning" : "muted";
         if (!player || !goal) duplicateText.textContent = "选好玩家和挑战后显示重复提醒。";
@@ -25084,10 +25076,7 @@ label{display:grid;align-content:start;gap:5px;font-size:13px}input,textarea{wid
           currentRecords = mergeRecords(currentRecords, [record]);
           recordsByPlayer.set(body.playerId, { records: currentRecords });
           savedVideos.set(video.key, `${statusNames[record.status] || "已保存"}`);
-          added++;
-          count.textContent = `本次已添加 ${added} 条`;
           button.textContent = savedVideos.get(video.key);
-          state.textContent = `已保存 · ${statusNames[record.status] || record.status}`;
           dialog.close();
           scan();
         } catch (error) {
@@ -25143,7 +25132,7 @@ label{display:grid;align-content:start;gap:5px;font-size:13px}input,textarea{wid
         if (host?.dataset.video === video.key) {
           const btn = host.shadowRoot?.querySelector("button");
           const text = savedVideos.get(video.key) || "添加到金榜";
-          if (btn && btn.textContent !== text) btn.textContent = text;
+          if (btn && !btn.disabled && !btn.title && btn.textContent !== text) btn.textContent = text;
           continue;
         }
         host?.remove();
@@ -25199,10 +25188,12 @@ label{display:grid;align-content:start;gap:5px;font-size:13px}input,textarea{wid
         button2.onclick = (event) => {
           event.preventDefault();
           event.stopPropagation();
-          toolbar.hidden = false;
           const current = videoPageReader();
           if (current) void openForm(current, button2);
-          else state.textContent = "当前视频信息尚未就绪，请稍后重试或刷新页面。";
+          else {
+            button2.title = "当前视频信息尚未就绪，请稍后重试或刷新页面。";
+            button2.textContent = "视频尚未就绪，点击重试";
+          }
         };
         shadow.append(button2);
       }
@@ -25210,7 +25201,7 @@ label{display:grid;align-content:start;gap:5px;font-size:13px}input,textarea{wid
       const video = videoPageReader();
       const button = host.shadowRoot.querySelector("button");
       const text = video && savedVideos.get(video.key) || "添加到金榜";
-      if (button.textContent !== text) button.textContent = text;
+      if (!button.disabled && !button.title && button.textContent !== text) button.textContent = text;
     }
     let scheduled = false;
     new MutationObserver(() => {
@@ -25229,10 +25220,6 @@ label{display:grid;align-content:start;gap:5px;font-size:13px}input,textarea{wid
     getValue: GM_getValue,
     setValue: GM_setValue,
     deleteValue: GM_deleteValue,
-    addValueChangeListener: GM_addValueChangeListener,
-    removeValueChangeListener: GM_removeValueChangeListener,
-    getTab: GM_getTab,
-    saveTab: GM_saveTab,
     openInTab: GM_openInTab,
     registerMenuCommand: GM_registerMenuCommand,
     xmlhttpRequest: GM_xmlhttpRequest

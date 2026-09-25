@@ -1,5 +1,6 @@
 import { readCard, readVideoPage, dateFromVideoDocument, videoRef, playerUids, mergeRecords, duplicates, submissionBody, statusNames } from './core.mjs';
-import { makeClient, startBridge } from './transport.mjs';
+import { makeClient, startAuthorization, TOKEN_KEY } from './transport.mjs';
+import { prepareIntake } from './intake.mjs';
 import { isRatedTier, tierBadgeLabel } from './vendor/tiers.ts';
 
 const css = `
@@ -8,8 +9,6 @@ const css = `
 button{border:1px solid #414852;background:#252c37;color:#e4e7ed;border-radius:6px;padding:6px 10px;cursor:pointer}
 button:hover{background:#343f50}button:disabled{opacity:.5;cursor:default}button.primary{background:#276cc8;border-color:#488ced;color:white}
 button:focus-visible,a:focus-visible{outline:2px solid #75b5ff;outline-offset:2px}a{color:#85b8ff;text-decoration:none}
-.toolbar{position:fixed;right:24px;bottom:24px;z-index:2147483645;padding:10px 12px;background:#181e28;border:1px solid #414852;border-radius:10px;box-shadow:0 4px 20px #0005;display:flex;gap:8px;align-items:center;flex-wrap:wrap;max-width:calc(100vw - 32px)}
-.toolbar[hidden]{display:none}
 .brand{color:#e9c474;font-weight:650}.muted,.hint{font-size:12px;color:#aab4c4}.error{color:#ffaaaa}.warning{color:#efd18d}
 dialog{color:inherit;background:#181e28;border:1px solid #495365;border-radius:12px;padding:0;width:660px;max-width:calc(100vw - 28px);max-height:90vh;box-shadow:0 12px 60px #0008}
 dialog::backdrop{background:#0008}.panel{padding:20px;display:grid;gap:14px}.head{display:flex;gap:14px;align-items:start;justify-content:space-between}.head h2{font-size:18px;margin:0}.video{font-size:14px;margin:4px 0;overflow-wrap:anywhere}
@@ -17,8 +16,8 @@ label{display:grid;align-content:start;gap:5px;font-size:13px}input,textarea{wid
 .grid{align-items:start}.grid>label{min-width:0}.grid input{height:40px;min-height:40px;line-height:22px}
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.picker{position:relative}.results{display:grid;gap:2px;margin-top:4px;max-height:180px;overflow:auto;border:1px solid #414852;border-radius:6px;background:#111822;padding:4px}.results[hidden]{display:none}.results button{text-align:left;border:0;background:transparent;border-radius:3px;padding:7px 9px}.results button:hover,.results button.active{background:#263d5c}
 .selected{font-size:12px;color:#91c7ff;overflow-wrap:anywhere;margin-top:4px;min-height:18px}.dup{font-size:12px;display:flex;gap:6px;align-items:baseline;flex-wrap:wrap;min-height:23px}.dup button{font-size:12px;padding:1px 6px}.records{padding:8px 10px;background:#111822;border-radius:6px;display:grid;gap:6px;font-size:12px;max-height:140px;overflow:auto}.records[hidden]{display:none}.records div{display:flex;gap:10px;flex-wrap:wrap}
-.footer{display:flex;gap:10px;align-items:center;justify-content:space-between;border-top:1px solid #353e4a;padding-top:14px}.footer .hint{flex:1}.extra{font-size:13px}.extra summary{cursor:pointer;color:#aab4c4}.extra label{margin-top:10px}.notice{position:fixed;bottom:20px;left:20px;right:20px;z-index:2147483647;padding:13px 16px;background:#192539;border:1px solid #668dc2;border-radius:8px}
-@media(max-width:520px){.grid{grid-template-columns:1fr}.panel{padding:14px}.toolbar{right:12px;bottom:12px}.footer{flex-wrap:wrap}}
+.footer{display:flex;gap:10px;align-items:center;justify-content:space-between;border-top:1px solid #353e4a;padding-top:14px}.footer .hint{flex:1}.extra{font-size:13px}.extra summary{cursor:pointer;color:#aab4c4}.extra label{margin-top:10px}
+@media(max-width:520px){.grid{grid-template-columns:1fr}.panel{padding:14px}.footer{flex-wrap:wrap}}
 `;
 function el(tag, text, props = {}) { const node = document.createElement(tag); if (text !== undefined) node.textContent = text; Object.assign(node, props); return node; }
 function link(label, url) {
@@ -42,34 +41,22 @@ export function loadVideoDate(gm, video) {
 
 export async function start({ gm, origin = 'https://cngist.com', role, searchable, challengeName, videoLoader = loadVideoDate, videoPageReader = () => readVideoPage(document, location.href) }) {
   if (role === 'bridge') {
-    let notice;
-    await startBridge(gm, origin, text => {
-      if (!notice) { notice = el('div', '', { className: 'notice', role: 'status' }); mount().append(notice); }
-      notice.textContent = text;
-    });
+    startAuthorization(gm, origin);
     return;
   }
   if (!['search', 'video'].includes(role)) return;
   const root = mount(), client = makeClient(gm, origin);
-  let catalog, catalogPromise, choices = [], activeDialog, saving = false, added = 0;
+  let catalog, catalogPromise, choices = [], activeDialog, saving = false;
   const recordsByPlayer = new Map(), savedVideos = new Map(), dateCache = new Map();
-  const toolbar = el('div', undefined, { className: 'toolbar', hidden: true });
-  const state = el('span', '先连接管理员账号', { className: 'muted', role: 'status' });
-  const count = el('span', '', { className: 'muted' });
-  const connect = el('button', '连接金榜', { type: 'button' });
-  const reload = el('button', '载入金榜', { type: 'button' });
-  const review = link('去审核', `${origin}/admin?tab=pending`);
-  toolbar.append(el('span', 'CN 金榜', { className: 'brand' }), state, connect, reload, count, review); root.append(toolbar);
-  connect.onclick = () => client.open().catch(error => { state.textContent = error.message; });
-  reload.onclick = () => loadCatalog(true).catch(error => { state.textContent = error.message; });
-  gm.registerMenuCommand('连接 CN 金榜管理员', () => { toolbar.hidden = false; connect.click(); });
+  gm.registerMenuCommand('授权 CN 金榜补录', () => client.open());
+  gm.registerMenuCommand('清除本机补录授权', () => gm.deleteValue(TOKEN_KEY));
+  gm.registerMenuCommand('去金榜审核', () => gm.openInTab(`${origin}/admin?tab=pending`, { active: true }));
 
   async function loadCatalog(force = false) {
     if (catalogPromise) return catalogPromise;
     if (catalog && !force) return catalog;
-    reload.disabled = true; state.textContent = '正在载入…';
     catalogPromise = client.request('catalog').then(data => {
-      for (const name of ['players', 'campaigns', 'maps', 'challenges', 'multiMapChallenges']) if (!Array.isArray(data[name])) throw new Error('金榜目录格式不匹配，请刷新连接页。');
+      for (const name of ['players', 'campaigns', 'maps', 'challenges', 'multiMapChallenges']) if (!Array.isArray(data[name])) throw new Error('金榜目录格式不匹配，请刷新目录。');
       catalog = data;
       const packs = new Map(data.campaigns.map(p => [p.id, p]));
       const maps = new Map(data.maps.map(m => [m.id, m]));
@@ -81,9 +68,8 @@ export async function start({ gm, origin = 'https://cngist.com', role, searchabl
           search: [pack?.name, pack?.cnName, pack?.shortName, map?.name, map?.cnName, c.name, c.type, tier],
           aliases: [...(pack?.searchAliases || []), ...(map?.searchAliases || [])], mapNames: [map?.name, map?.cnName].filter(Boolean) };
       });
-      state.textContent = `已连接 · ${data.adminName}`; return catalog;
-    }).catch(error => { state.textContent = error.message; throw error; })
-      .finally(() => { catalogPromise = null; reload.disabled = false; });
+      return catalog;
+    }).finally(() => { catalogPromise = null; });
     return catalogPromise;
   }
 
@@ -121,11 +107,8 @@ export async function start({ gm, origin = 'https://cngist.com', role, searchabl
   }
 
   async function openForm(video, button) {
-    toolbar.hidden = false;
     if (saving) return;
-    button.disabled = true;
-    try { await loadCatalog(); } catch (error) { state.textContent = `${error.message} 先点“连接金榜”。`; return; }
-    finally { button.disabled = false; }
+    if (!await prepareIntake(client, button, loadCatalog)) return;
     activeDialog?.close(); activeDialog?.remove();
     const dialog = activeDialog = el('dialog');
     const panel = el('div', undefined, { className: 'panel' }); dialog.append(panel); root.append(dialog);
@@ -169,11 +152,11 @@ export async function start({ gm, origin = 'https://cngist.com', role, searchabl
 
     function update() {
       const player = playerPicker.value, goal = challengePicker.value;
-      submit.disabled = saving || !player || !goal;
+      submit.disabled = saving || !player || !goal || player.status === 'blocked';
       const standard = ['high-std', 'mid-std', 'low-std'].includes(goal?.tier);
       const rejected = ['unwilling', 'blocked'].includes(player?.status);
       submit.textContent = rejected ? '按玩家状态保存' : standard ? '添加记录（Standard）' : '加入待审核';
-      policy.textContent = rejected ? '该玩家不接受入榜，沿用后台规则保存为已拒绝。' : standard ? 'Standard 按现有规则自动通过。' : '保存后进入待审核队列，稍后统一审核。';
+      policy.textContent = player?.status === 'blocked' ? '该玩家禁止补录。' : rejected ? '该玩家不接受入榜，沿用后台规则保存为已拒绝。' : standard ? 'Standard 按现有规则自动通过。' : '保存后进入待审核队列，稍后统一审核。';
       const found = player && goal ? duplicates(currentRecords, player.id, goal.id, url.value) : [];
       duplicateText.className = found.length || recordWarning ? 'warning' : 'muted';
       if (!player || !goal) duplicateText.textContent = '选好玩家和挑战后显示重复提醒。';
@@ -221,8 +204,8 @@ export async function start({ gm, origin = 'https://cngist.com', role, searchabl
         const response = await client.request('submit', body);
         const record = response.record;
         currentRecords = mergeRecords(currentRecords, [record]); recordsByPlayer.set(body.playerId, { records: currentRecords });
-        savedVideos.set(video.key, `${statusNames[record.status] || '已保存'}`); added++; count.textContent = `本次已添加 ${added} 条`;
-        button.textContent = savedVideos.get(video.key); state.textContent = `已保存 · ${statusNames[record.status] || record.status}`;
+        savedVideos.set(video.key, `${statusNames[record.status] || '已保存'}`);
+        button.textContent = savedVideos.get(video.key);
         dialog.close(); scan();
       } catch (error) {
         result.textContent = error.message; result.className = 'error';
@@ -257,7 +240,7 @@ export async function start({ gm, origin = 'https://cngist.com', role, searchabl
       if (host?.dataset.video === video.key) {
         const btn = host.shadowRoot?.querySelector('button');
         const text = savedVideos.get(video.key) || '添加到金榜';
-        if (btn && btn.textContent !== text) btn.textContent = text;
+        if (btn && !btn.disabled && !btn.title && btn.textContent !== text) btn.textContent = text;
         continue;
       }
       host?.remove(); host = el('div'); host.dataset.cngistButton = ''; host.dataset.video = video.key;
@@ -299,10 +282,9 @@ export async function start({ gm, origin = 'https://cngist.com', role, searchabl
       const button = el('button', '添加到金榜', { type: 'button' });
       button.onclick = event => {
         event.preventDefault(); event.stopPropagation();
-        toolbar.hidden = false;
         const current = videoPageReader();
         if (current) void openForm(current, button);
-        else state.textContent = '当前视频信息尚未就绪，请稍后重试或刷新页面。';
+        else { button.title = '当前视频信息尚未就绪，请稍后重试或刷新页面。'; button.textContent = '视频尚未就绪，点击重试'; }
       };
       shadow.append(button);
     }
@@ -310,7 +292,7 @@ export async function start({ gm, origin = 'https://cngist.com', role, searchabl
     const video = videoPageReader();
     const button = host.shadowRoot.querySelector('button');
     const text = (video && savedVideos.get(video.key)) || '添加到金榜';
-    if (button.textContent !== text) button.textContent = text;
+    if (!button.disabled && !button.title && button.textContent !== text) button.textContent = text;
   }
   let scheduled = false;
   new MutationObserver(() => {

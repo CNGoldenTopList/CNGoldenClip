@@ -4,8 +4,7 @@ import { start } from './app.mjs';
 
 const gm = {
   getValue: GM_getValue, setValue: GM_setValue, deleteValue: GM_deleteValue,
-  addValueChangeListener: GM_addValueChangeListener, removeValueChangeListener: GM_removeValueChangeListener,
-  getTab: GM_getTab, saveTab: GM_saveTab, openInTab: GM_openInTab,
+  openInTab: GM_openInTab,
   registerMenuCommand: GM_registerMenuCommand, xmlhttpRequest: GM_xmlhttpRequest,
 };
 void start({ gm, searchable, challengeName: challengeDisplayName,

@@ -23,19 +23,25 @@ const server = createServer(async (req, res) => {
   if (path === '/harness.js') { res.writeHead(200, { 'content-type': 'text/javascript' }); return res.end(js); }
   if (path === '/fixture/video') return res.end('<meta property="og:url" content="https://www.bilibili.com/video/BV1xx411c7mD/"><meta property="video:release_date" content="2026-09-16T16:00:00Z">');
   if (path === '/api/auth/session') return json({ account: { role: 'admin', displayName: '本地测试管理员' } });
+  if (path === '/api/admin/submission-token' && req.method === 'POST') return json({ ok: true, id: 1, token: `cngclip_${'a'.repeat(43)}`, expiresAt: new Date(Date.now() + 86400000).toISOString() });
+  if (path === '/api/clip/authorization') return req.headers.authorization === `Bearer cngclip_${'a'.repeat(43)}` ? json({ ok: true }) : json({ error: '模拟授权无效' }, 401);
   if (path === '/api/catalog') return json(catalog);
-  if (path === '/api/records') return json({ records: publicRecords.filter(r => r.playerId === Number(new URL(req.url, 'http://localhost').searchParams.get('playerId'))) });
-  if (path === '/api/admin/submissions' && req.method === 'GET') return failRecords ? json({ error: '模拟队列不可用' }, 503) : json({ ok: true, data: adminRecords });
-  if (path === '/api/admin/submissions' && req.method === 'POST') {
+  if (path === '/api/records') return failRecords ? json({ error: '模拟公开成绩不可用' }, 503) : json({ records: publicRecords.filter(r => r.playerId === Number(new URL(req.url, 'http://localhost').searchParams.get('playerId'))) });
+  if (path === '/api/clip/submissions' && req.method === 'POST') {
+    if (req.headers.authorization !== `Bearer cngclip_${'a'.repeat(43)}`) return json({ error: '模拟授权无效' }, 401);
     let body = ''; for await (const chunk of req) body += chunk;
     if (failSave) return json({ ok: false, error: '模拟保存失败' }, 503);
-    const input = JSON.parse(body); const record = { ...input, id: nextId++, status: input.challengeId === 2 ? 'accepted' : input.status };
+    const input = JSON.parse(body); const record = { ...input, id: nextId++, status: input.challengeId === 2 ? 'accepted' : 'pending' };
     adminRecords.push(record); return json({ ok: true, record }, 201);
+  }
+  if (path === '/api/clip/submissions' && req.method === 'GET') {
+    if (req.headers.authorization !== `Bearer cngclip_${'a'.repeat(43)}`) return json({ error: '模拟授权无效' }, 401);
+    return failRecords ? json({ error: '模拟队列不可用' }, 503) : json({ ok: true, data: adminRecords.filter(r => r.playerId === Number(new URL(req.url, 'http://localhost').searchParams.get('playerId'))) });
   }
   if (path === '/toggle-records') { failRecords = !failRecords; return res.end('ok'); }
   if (path === '/toggle-save') { failSave = !failSave; return res.end('ok'); }
   res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
   if (path === '/search') return res.end(html(`<h1>B 站搜索卡片 · 本地模拟</h1><p>所有提交只写本地内存，关闭服务即清空。</p><button onclick="document.querySelector('main').innerHTML=${JSON.stringify(card('BV1Dp4y1D7QR', '300', '另一条视频', '2020年6月20日')).replaceAll('"','&quot;')}">模拟翻页</button><button onclick="fetch('/toggle-records')">切换队列读取失败</button><button onclick="fetch('/toggle-save')">切换保存失败</button><main>${card('BV1xx411c7mD', '202', '【Celeste】测试地图 金草莓', '21小时前')}${card('BV1Dp4y1D7QR', '999', '未知玩家视频', '2020年6月20日')}</main>`));
-  return res.end(html('<h1>金榜连接页 · 本地模拟管理员</h1><p>请保留此页，返回搜索页载入金榜。此页没有线上账号或 Cookie。</p>'));
+  return res.end(html(`<h1>金榜授权页 · 本地模拟管理员</h1><p>点击一键授权，完成后关闭本页，回到 B 站再次添加。</p><button data-cngoldenclip-authorize>一键授权</button><p id="installed" role="status"></p><script>addEventListener('cngoldenclip-auth-state',()=>{const s=document.documentElement.getAttribute('data-cngoldenclip-auth-state');document.querySelector('[data-cngoldenclip-authorize]').disabled=s==='pending';document.getElementById('installed').textContent=s==='success'?'授权成功，可以关闭本页':s==='pending'?'正在授权…':document.documentElement.getAttribute('data-cngoldenclip-auth-error');});</script>`));
 });
 server.listen(8279, '127.0.0.1', () => console.log('本地验证：http://127.0.0.1:8279/search'));

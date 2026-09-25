@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { readVideoPage, videoRef, fullCardDate, validDate, beijingDate, playerUids, mergeRecords, duplicates, submissionBody } from '../src/core.mjs';
-import { makeClient, startBridge, keyOf } from '../src/transport.mjs';
+
 
 test('播放页保留分 P，读取 UP 主与北京时间日期，拒绝切换期间不一致的页面', () => {
   const elements = {
@@ -49,42 +49,4 @@ test('多个 UID 可匹配同一金榜玩家，提交仅使用原接口字段，
     videoUrl: 'https://www.bilibili.com/video/BV1xx411c7mD', achievedAt: '2026-09-17', rawVideoUrl: '', playerNote: '' });
   assert.equal(submissionBody({ ...input, player: { ...player, status: 'unwilling' } }).status, 'rejected');
   assert.throws(() => submissionBody({ ...input, achievedAt: '' }));
-});
-
-test('GM 通道仅调用原接口，凭据保持同源；连接页重新初始化不会重放提交', async () => {
-  const storage = new Map(), callbacks = new Map(); let sequence = 0, opened;
-  const gm = {
-    getValue: key => storage.get(key),
-    setValue(key, value) { const old = storage.get(key); storage.set(key, value); for (const [k, fn] of callbacks.values()) if (k === key) fn(key, old, value, true); },
-    deleteValue: key => storage.delete(key),
-    addValueChangeListener(key, fn) { const id = ++sequence; callbacks.set(id, [key, fn]); return id; },
-    removeValueChangeListener: id => callbacks.delete(id),
-    getTab: fn => fn({}), saveTab() {}, openInTab: url => { opened = url; },
-  };
-  const client = makeClient(gm, 'https://cngist.com');
-  await assert.rejects(client.request('catalog'), /连接金榜/);
-  await client.open();
-  const oldLocation = globalThis.location; globalThis.location = new URL(opened);
-  const calls = []; let role = 'admin';
-  const fetcher = async (url, options) => {
-    calls.push({ url, options });
-    assert.equal(options.credentials, 'same-origin');
-    const payload = url.endsWith('/api/auth/session') ? { account: { role, displayName: '管理员' } }
-      : { record: { id: 99, status: 'pending' } };
-    return { ok: true, status: 200, json: async () => payload };
-  };
-  try {
-    await startBridge(gm, 'https://cngist.com', () => {}, fetcher);
-    const body = submissionBody({ player: { id: 3 }, challenge: { id: 8 }, videoUrl: 'BV1xx411c7mD', achievedAt: '2026-09-17' });
-    assert.equal((await client.request('submit', body)).record.id, 99);
-    assert.equal(calls.filter(c => c.options.method === 'POST').length, 1);
-    assert.equal(calls.at(-1).url, 'https://cngist.com/api/admin/submissions');
-    assert.deepEqual(JSON.parse(calls.at(-1).options.body), body);
-    await startBridge(gm, 'https://cngist.com', () => {}, fetcher);
-    assert.equal(calls.filter(c => c.options.method === 'POST').length, 1);
-    role = 'player'; await assert.rejects(client.request('submit', body), /管理员/);
-    assert.equal(calls.filter(c => c.options.method === 'POST').length, 1);
-    const channel = new URLSearchParams(globalThis.location.hash.slice(1)).get('cngist-intake');
-    assert.equal(gm.getValue(keyOf(channel, 'request')), undefined);
-  } finally { globalThis.location = oldLocation; }
 });

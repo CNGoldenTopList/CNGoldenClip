@@ -1,10 +1,10 @@
 {
   "name": "cngoldenclip",
-  "version": "1.0.4",
+  "version": "1.1.1",
   "private": true,
   "type": "module",
   "description": "A userscript for CNGist admins to quickly log challenge completions from Bilibili search results, with automatic player matching and duplicate reminders.",
-  "repository": "github:Diving-Fish/CNGoldenClip",
+  "repository": "github:CNGoldenTopList/CNGoldenClip",
   "scripts": {
     "build": "node build.mjs",
     "test": "node --test tests/*.test.mjs",
